@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: guardian
+      POSTGRES_USER: guardian
+      POSTGRES_PASSWORD: guardian
+    ports: ["5432:5432"]
+    volumes: [guardian_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guardian -d guardian"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  guardian-api:
+    build: ./guardian-api
+
+    environment:
+      DATABASE_URL: postgresql+psycopg://guardian:guardian@postgres:5432/guardian
+      FRONTEND_ORIGIN: http://localhost:3000
+      DEMO_AGENT_ORIGIN: http://localhost:8100
+
+      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID}
+      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET}
+      PAYPAL_BASE_URL: ${PAYPAL_BASE_URL:-https://api-m.sandbox.paypal.com}
+      PAYPAL_RETURN_URL: ${PAYPAL_RETURN_URL:-http://localhost:3000/paypal/return}
+      PAYPAL_CANCEL_URL: ${PAYPAL_CANCEL_URL:-http://localhost:3000/paypal/cancel}
+
+    ports: ["8000:8000"]
+    volumes: [./guardian-api:/app]
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  ollama:
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes: [ollama_data:/root/.ollama]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  demo-agent:
+    build: ./demo-agent
+    environment:
+      REAL_WEBSITE_ALLOWLIST: books.toscrape.com
+      GUARDIAN_API_URL: http://guardian-api:8000
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:0.6b}
+      AGENT_ID: demo-shopping-agent
+      KEY_PATH: /keys/demo-agent.pem
+      FRONTEND_ORIGIN: http://localhost:3000
+    ports: ["8100:8100"]
+    volumes:
+      - ./demo-agent:/app
+      - demo_agent_keys:/keys
+    depends_on:
+      guardian-api: {condition: service_healthy}
+      ollama: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_GUARDIAN_API_URL: http://localhost:8000
+      NEXT_PUBLIC_DEMO_AGENT_URL: http://localhost:8100
+    ports: ["3000:3000"]
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      demo-agent: {condition: service_healthy}
+
+volumes:
+  guardian_data:
+  demo_agent_keys:
+  ollama_data:
